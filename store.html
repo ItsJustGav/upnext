@@ -94,171 +94,234 @@
     </footer>
   </main>
 
-  <script>
-    const params = new URLSearchParams(location.search);
-    const storeCode = params.get("code") || "STORE";
-    const storeName = params.get("name") || storeCode;
-    document.getElementById("storeTitle").textContent = `${storeName} (${storeCode})`;
+<script type="module">
+  /* ---------- Firebase imports (CDN) ---------- */
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getDatabase, ref, onValue, set, runTransaction
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-    const KEY  = `upnext:${storeCode}:reps`;
-    const HKEY = `upnext:${storeCode}:history`;
-    const MEKEY= `upnext:me`;
-    const PKEY = "upnext:pin";
-    const getPIN = () => localStorage.getItem(PKEY) || "";
-    function requirePIN(){ const pin=getPIN(); if(!pin) return true; return prompt("Enter Manager PIN to continue:")===pin; }
+  /* ---------- Your Firebase config ---------- */
+  const firebaseConfig = {
+    apiKey: "AIzaSyC5kS-d_thwsdqcvSs6qWm4L87Bh1vuV18",
+    authDomain: "upnext-d002e.firebaseapp.com",
+    databaseURL: "https://upnext-d002e-default-rtdb.firebaseio.com",
+    projectId: "upnext-d002e",
+    storageBucket: "upnext-d002e.firebasestorage.app",
+    messagingSenderId: "91747791721",
+    appId: "1:91747791721:web:85ff847fa3bdcee77643f8",
+    measurementId: "G-8NS326X6LD"
+  };
 
-    let reps = JSON.parse(localStorage.getItem(KEY) || "[]");
-    let history = JSON.parse(localStorage.getItem(HKEY) || "[]");
-    let remembered = localStorage.getItem(MEKEY) || "";
+  /* ---------- Init Firebase ---------- */
+  const app  = initializeApp(firebaseConfig);
+  const db   = getDatabase(app);
+  const auth = getAuth(app);
+  try { await signInAnonymously(auth); } catch (e) { console.error("Anon auth failed:", e); }
 
-    const $ = id => document.getElementById(id);
-    const nowISO = () => new Date().toISOString();
+  /* ---------- Page / store params ---------- */
+  const params = new URLSearchParams(location.search);
+  const storeCode = params.get("code") || "STORE";
+  const storeName = params.get("name") || storeCode;
+  document.getElementById("storeTitle").textContent = `${storeName} (${storeCode})`;
 
-    function persist(){ localStorage.setItem(KEY, JSON.stringify(reps)); localStorage.setItem(HKEY, JSON.stringify(history)); render(); }
-    function log(msg){ history.unshift(`[${new Date().toLocaleTimeString()}] ${msg}`); history = history.slice(0,50); }
+  /* ---------- Keep these local-only ---------- */
+  const MEKEY = "upnext:me";   // Remember Me (local)
+  const PKEY  = "upnext:pin";  // Manager PIN (local)
+  const getPIN = () => localStorage.getItem(PKEY) || "";
+  function requirePIN(){ const pin=getPIN(); return !pin || prompt("Enter Manager PIN to continue:")===pin; }
 
-    function ensureDefaults(r){
-      if (r.hadFirst === undefined) r.hadFirst = (r.status === 'with_customer'); // assume true if already serving
-      if (r.status === 'free' && !r.freeSince) r.freeSince = nowISO();
-      if (r.status !== 'free') r.freeSince = r.freeSince || null;
+  /* ---------- DB refs for this store ---------- */
+  const storeRef   = ref(db, `stores/${storeCode}`);
+  const repsRef    = ref(db, `stores/${storeCode}/reps`);
+  const historyRef = ref(db, `stores/${storeCode}/history`);
+
+  /* ---------- UI/state ---------- */
+  let reps = [];
+  let history = [];
+  let remembered = localStorage.getItem(MEKEY) || "";
+
+  const $ = id => document.getElementById(id);
+  const nowISO = () => new Date().toISOString();
+
+  /* ---------- Live listeners (real-time sync) ---------- */
+  onValue(storeRef, (snap) => {
+    const data = snap.val() || {};
+    reps    = Array.isArray(data.reps) ? data.reps : [];
+    history = Array.isArray(data.history) ? data.history : [];
+    // backfill defaults
+    reps.forEach(r => {
+      if (r.hadFirst === undefined) r.hadFirst = (r.status === "with_customer");
+      if (r.status === "free" && !r.freeSince) r.freeSince = nowISO();
+      if (r.status !== "free") r.freeSince = r.freeSince || null;
       if (r.inQueue === undefined) r.inQueue = true;
-    }
-    reps.forEach(ensureDefaults);
+    });
+    render();
+  });
 
-    function addRep(name){
-      name = name.trim(); if(!name) return;
-      const ex = reps.find(r => r.name.toLowerCase() === name.toLowerCase());
+  /* ---------- Helpers that write to Firebase ---------- */
+  async function setReps(next){ await set(repsRef, next); }
+  async function addHistory(line){
+    const entry = `[${new Date().toLocaleTimeString()}] ${line}`;
+    const next = [entry, ...(history || [])].slice(0,50);
+    await set(historyRef, next);
+  }
+
+  function freeSort(a,b){
+    // never-had-customer first, then longest-free
+    const pa = a.hadFirst ? 1 : 0;
+    const pb = b.hadFirst ? 1 : 0;
+    if (pa !== pb) return pa - pb;
+    return new Date(a.freeSince || "2100").getTime() - new Date(b.freeSince || "2100").getTime();
+  }
+
+  async function addRep(name){
+    name = (name || "").trim(); if (!name) return;
+    await runTransaction(repsRef, (curr) => {
+      const list = Array.isArray(curr) ? curr : [];
+      const ex = list.find(r => r.name.toLowerCase() === name.toLowerCase());
       if (ex){
-        ensureDefaults(ex);
-        ex.inQueue = true;
-        ex.status = 'free';
-        ex.freeSince = nowISO();
-        // do NOT flip hadFirst; their history stands
-        ex.lastUpdate = nowISO();
-        log(`${ex.name} started shift`);
+        ex.inQueue = true; ex.status="free"; ex.saleType="";
+        ex.freeSince = nowISO(); ex.lastUpdate = nowISO();
       } else {
-        const id = String(Date.now()) + Math.random();
-        reps.push({ id, name, status:'free', inQueue:true, freeSince: nowISO(), hadFirst:false, lastUpdate: nowISO() });
-        log(`${name} started shift`);
+        list.push({
+          id: String(Date.now()) + Math.random(),
+          name, status:"free", inQueue:true,
+          freeSince: nowISO(), hadFirst:false, lastUpdate: nowISO()
+        });
       }
-      persist();
-    }
+      return list;
+    });
+    await addHistory(`${name} started shift`);
+  }
 
-    function setStatus(id, status){
-      const r = reps.find(x => x.id === id); if(!r) return;
+  async function setStatus(id, status){
+    await runTransaction(repsRef, (curr) => {
+      const list = Array.isArray(curr) ? curr : [];
+      const r = list.find(x => x.id === id); if (!r) return list;
       r.status = status;
-      if (status === 'with_customer') r.hadFirst = true; // first assignment marks as having had a customer
-      if (status === 'free') r.freeSince = r.freeSince || nowISO();
+      if (status === "with_customer") r.hadFirst = true;
+      if (status === "free") r.freeSince = r.freeSince || nowISO();
       else r.freeSince = null;
       r.lastUpdate = nowISO();
-      persist();
-    }
+      return list;
+    });
+  }
 
-    function clockOut(id){
-      const idx = reps.findIndex(r => r.id === id);
-      if (idx === -1) return;
-      const name = reps[idx].name;
-      reps.splice(idx, 1);
-      log(`${name} clocked out (removed from queue)`);
-      persist();
-    }
+  async function clockOut(id){
+    await runTransaction(repsRef, (curr) => {
+      const list = Array.isArray(curr) ? curr : [];
+      const idx = list.findIndex(r => r.id === id);
+      if (idx >= 0) list.splice(idx, 1);
+      return list;
+    });
+    await addHistory(`Clock out`);
+  }
 
-    function freeSort(a,b){
-      // unsold (hadFirst=false) first, then by freeSince ASC
-      const pa = a.hadFirst ? 1 : 0;
-      const pb = b.hadFirst ? 1 : 0;
-      if (pa !== pb) return pa - pb;
-      const ta = new Date(a.freeSince || '2100-01-01').getTime();
-      const tb = new Date(b.freeSince || '2100-01-01').getTime();
-      return ta - tb;
-    }
+  async function nextTurn(){
+    await runTransaction(repsRef, (curr) => {
+      const list = Array.isArray(curr) ? curr : [];
+      const candidates = list.filter(r => r.inQueue && r.status==='free' && r.freeSince).sort(freeSort);
+      if (!candidates.length) return list;
+      const winnerId = candidates[0].id;
+      const idx = list.findIndex(r => r.id === winnerId);
+      if (idx >= 0){
+        const [r] = list.splice(idx, 1);
+        list.unshift(r);
+        r.status = "with_customer";
+        r.hadFirst = true;
+        r.freeSince = null;
+        r.lastUpdate = nowISO();
+      }
+      return list;
+    });
+    await addHistory(`Next Turn`);
+  }
 
-    function nextTurn(){
-      const candidates = reps.filter(r => r.inQueue && r.status==='free' && r.freeSince);
-      if (!candidates.length) return alert("No eligible reps.");
-      candidates.sort(freeSort);
-      const winner = candidates[0];
-      const idx = reps.findIndex(r => r.id === winner.id);
-      const [r] = reps.splice(idx, 1);
-      reps.unshift(r);
-      r.status = 'with_customer';
-      r.hadFirst = true;
-      r.freeSince = null;
-      r.lastUpdate = nowISO();
-      log(`${r.name} is up (With Customer)`);
-      persist();
-    }
+  async function resetStore(){
+    if (!requirePIN()) return;
+    if (!confirm(`Reset ${storeName}?`)) return;
+    await set(storeRef, { reps: [], history: [] });
+  }
 
-    function resetStore(){
-      if (!requirePIN()) return;
-      if (!confirm(`Reset ${storeName}?`)) return;
-      reps = []; history = [];
-      persist();
-    }
+  /* ---------- Render (same UI, fed by Firebase) ---------- */
+  function render(){
+    $("meBadge").textContent = remembered ? `You: ${remembered}` : "You: (not set)";
+    if (remembered && !$("myName").value) $("myName").value = remembered;
 
-    function render(){
-      $("meBadge").textContent = remembered ? `You: ${remembered}` : "You: (not set)";
-      if (remembered && !$("myName").value) $("myName").value = remembered;
+    const free  = reps.filter(r => r.inQueue && r.status==='free').sort(freeSort);
+    const withC = reps.filter(r => r.inQueue && r.status==='with_customer');
+    const away  = reps.filter(r => r.inQueue && r.status==='away');
+    const display = [...free, ...withC, ...away];
 
-      const free = reps.filter(r => r.inQueue && r.status==='free').sort(freeSort);
-      const withC = reps.filter(r => r.inQueue && r.status==='with_customer');
-      const away  = reps.filter(r => r.inQueue && r.status==='away');
-      const display = [...free, ...withC, ...away];
+    $("repTable").innerHTML = display.length ? display.map((r,i)=>{
+      const tag = r.status==='with_customer' ? `<span class="tag red">With Customer</span>` :
+                  r.status==='away'          ? `<span class="tag yellow">Away/Lunch</span>` :
+                                               `<span class="tag grey">${r.hadFirst ? 'Freed Up' : 'New / No Customer'}</span>`;
+      const updated = new Date(r.lastUpdate || Date.now()).toLocaleTimeString();
+      const upNext = (i===0 && r.status==='free') ? ` <span class="tag" style="border-color:#00eaff;">Up Next →</span>` : "";
+      return `<tr>
+        <td>${r.name}${upNext}</td>
+        <td>${tag}</td>
+        <td>
+          <div class="row" style="gap:6px">
+            <button class="secondary" onclick="setStatus('${r.id}','with_customer')">With Customer</button>
+            <button class="secondary" onclick="setStatus('${r.id}','away')">Away</button>
+            <button class="ok" onclick="setStatus('${r.id}','free')">Freed Up</button>
+            <button class="danger" onclick="clockOut('${r.id}')">Clock Out</button>
+          </div>
+        </td>
+        <td class="muted">${updated}</td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="4" class="muted">No reps yet.</td></tr>`;
 
-      $("repTable").innerHTML = display.length ? display.map((r,i)=>{
-        const tag = r.status==='with_customer' ? `<span class="tag red">With Customer</span>` :
-                    r.status==='away'          ? `<span class="tag yellow">Away/Lunch</span>` :
-                                                 `<span class="tag grey">${r.hadFirst ? 'Freed Up' : 'New / No Customer'}</span>`;
-        const updated = new Date(r.lastUpdate).toLocaleTimeString();
-        const upNext = (i===0 && r.status==='free') ? ` <span class="tag" style="border-color:#00eaff;">Up Next →</span>` : "";
-        return `<tr>
-          <td>${r.name}${upNext}</td>
-          <td>${tag}</td>
-          <td>
-            <div class="row" style="gap:6px">
-              <button class="secondary" onclick="setStatus('${r.id}','with_customer')">With Customer</button>
-              <button class="secondary" onclick="setStatus('${r.id}','away')">Away</button>
-              <button class="ok" onclick="setStatus('${r.id}','free')">Freed Up</button>
-              <button class="danger" onclick="clockOut('${r.id}')">Clock Out</button>
-            </div>
-          </td>
-          <td class="muted">${updated}</td>
-        </tr>`;
-      }).join("") : `<tr><td colspan="4" class="muted">No reps yet.</td></tr>`;
+    const inQ = reps.length;
+    const withCust = reps.filter(r => r.status==='with_customer').length;
+    document.getElementById("stats").textContent = `In queue: ${inQ} • With customers: ${withCust}`;
 
-      const inQ = reps.length;
-      const withCust = reps.filter(r => r.status==='with_customer').length;
-      $("stats").textContent = `In queue: ${inQ} • With customers: ${withCust}`;
+    const topFree = free[0];
+    document.getElementById("hint").textContent =
+      topFree ? `Up Next: ${topFree.name} (${topFree.hadFirst ? 'had a customer' : 'no customer yet'})` : "";
 
-      const topFree = free[0];
-      $("hint").textContent = topFree ? `Up Next: ${topFree.name} (${topFree.hadFirst ? 'had a customer' : 'no customer yet'})` : "";
-      $("history").innerHTML = history.length ? history.slice(0,20).map(h=>`<div>${h}</div>`).join("") : "No activity yet.";
-    }
+    document.getElementById("history").innerHTML =
+      history.length ? history.slice(0,20).map(h=>`<div>${h}</div>`).join("") : "No activity yet.";
+  }
 
-    $("startShiftBtn").onclick = ()=>{
-      const n = (document.getElementById("myName").value || "").trim() || (remembered || "").trim();
-      if (!n) return alert("Enter your name first.");
-      addRep(n);
-    };
-    $("rememberMeBtn").onclick = ()=>{
-      const n = (document.getElementById("myName").value || "").trim();
-      if(!n) return alert("Type your name first.");
-      localStorage.setItem(MEKEY, n); remembered = n; render();
-      alert(`Saved "${n}" on this device.`);
-    };
-    $("nextBtn").onclick = nextTurn;
+  /* ---------- UI hooks ---------- */
+  document.getElementById("startShiftBtn").onclick = ()=>{
+    const n = (document.getElementById("myName").value || "").trim() || (remembered || "").trim();
+    if (!n) return alert("Enter your name first.");
+    addRep(n);
+  };
+  document.getElementById("rememberMeBtn").onclick = ()=>{
+    const n = (document.getElementById("myName").value || "").trim();
+    if(!n) return alert("Type your name first.");
+    localStorage.setItem(MEKEY, n); remembered = n; render();
+    alert(`Saved "${n}" on this device.`);
+  };
+  document.getElementById("nextBtn").onclick = nextTurn;
 
-    // long press reset
-    (function setupLongPressReset(){
-      const btn = document.getElementById("resetBtn"); let t=null; const hold=1500;
-      function start(){ t=setTimeout(()=>resetStore(), hold); }
-      function cancel(){ if(t) clearTimeout(t); }
-      btn.addEventListener("mousedown",start);
-      btn.addEventListener("touchstart",start);
-      ["mouseup","mouseleave","mouseout","touchend","touchcancel"].forEach(ev=>btn.addEventListener(ev,cancel));
-    })();
+  // long-press reset
+  (function setupLongPressReset(){
+    const btn = document.getElementById("resetBtn"); let t=null; const hold=1500;
+    function start(){ t=setTimeout(()=>resetStore(), hold); }
+    function cancel(){ if(t) clearTimeout(t); }
+    btn.addEventListener("mousedown",start);
+    btn.addEventListener("touchstart",start);
+    ["mouseup","mouseleave","mouseout","touchend","touchcancel"].forEach(ev=>btn.addEventListener(ev,cancel));
+  })();
 
-    render();
-  </script>
+  // expose functions for inline onclick="" to see them
+Object.assign(window, {
+  setStatus,
+  clockOut,
+  addRep,
+  nextTurn,
+  resetStore
+});
+
+</script>
+
 </body>
 </html>
