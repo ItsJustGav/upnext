@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>UpNext — Stores</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --card: #11141a;
+      --card2: #0f1116;
+      --border: #1a1f2a;
+      --text: #f5faff;
+      --muted: #9bb1c9;
+      --primary: #00eaff;
+      --focus: rgba(0,234,255,0.35);
+      --ok: #00b4ff;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 50% 0%, #0e1720, #07080b 90%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Inter, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: linear-gradient(90deg, #0a0c10 0%, #0b1323 100%);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 0 12px rgba(0,234,255,0.15);
+      padding: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .brand {
+      font-weight: 900;
+      letter-spacing: .2px;
+      font-size: 1.8rem;
+      text-shadow: 0 0 12px rgba(0,234,255,0.5);
+    }
+    .brand-next {
+      color: var(--primary);
+      text-shadow: 0 0 12px rgba(0,234,255,0.8);
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    h2 {
+      color: var(--primary);
+      text-shadow: 0 0 8px rgba(0,234,255,0.4);
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 0 14px rgba(0,234,255,0.08);
+    }
+
+    .store-btn {
+      display: block;
+      width: 100%;
+      background: var(--primary);
+      color: #000;
+      font-weight: 700;
+      border: 1px solid var(--primary);
+      border-radius: 12px;
+      margin: 10px 0;
+      padding: 14px;
+      font-size: 1.1rem;
+      text-shadow: none;
+      cursor: pointer;
+      box-shadow: 0 0 16px rgba(0,234,255,0.35);
+      transition: all 0.15s ease;
+    }
+    .store-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 22px rgba(0,234,255,0.55);
+    }
+
+    .store-btn.secondary {
+      background: #0e121a;
+      color: #b7f8ff;
+      border-color: #1b2738;
+      box-shadow: 0 0 8px rgba(0,234,255,0.15);
+    }
+
+    footer {
+      text-align: center;
+      padding: 12px;
+      font-size: 12px;
+      color: #7ab5ff;
+      text-shadow: 0 0 8px rgba(0,234,255,0.4);
+    }
+
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="brand">U<span class="tight">p</span><span class="brand-next">Next</span></div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2>Select Store</h2>
+      <button class="store-btn" onclick="go('LB','Lumberton')">Lumberton</button>
+      <button class="store-btn" onclick="go('BM','Beaumont')">Beaumont</button>
+      <button class="store-btn" onclick="go('OW','Orange West')">Orange</button>
+      <button class="store-btn" onclick="go('VI','Vidor')">Vidor</button>
+      <button class="store-btn secondary" onclick="addCustom()">+ Add Custom Store</button>
+    </div>
+  </main>
+
+  <footer>
+    Up<span style="color:#00eaff;">Next</span> — Rotation Tracker Prototype
+  </footer>
+
+  <script>
+    function go(code, name) {
+      location.href = `store.html?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`;
+    }
+    function addCustom() {
+      const name = prompt("Enter store name:");
+      if (!name) return;
+      const code = name.replace(/\s+/g, '').toUpperCase().slice(0, 3);
+      go(code, name);
+    }
+  </script>
+</body>
+</html>
